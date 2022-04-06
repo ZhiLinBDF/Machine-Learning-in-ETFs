@@ -1,0 +1,2766 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[1]:
+
+
+import pandas as pd
+import numpy as np
+import pandas_datareader.data as web
+import datetime
+import matplotlib.pyplot as plt
+import copy as copy
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error
+
+# from sklearn import model_selection
+from sklearn.model_selection import train_test_split, TimeSeriesSplit, GridSearchCV
+from sklearn.model_selection import KFold
+
+from sklearn.linear_model import Lasso, Ridge, LinearRegression
+import xgboost as xgb
+from xgboost import XGBRegressor
+
+
+# In[2]:
+
+
+start = datetime.datetime(2006, 1, 11)
+end = datetime.datetime(2022, 2, 28)
+
+ticks = ['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']
+ETFList = []
+for i in ticks:
+    ETFList.append(web.get_data_yahoo(i, start, end, interval='d')['Adj Close'])
+
+ETFs = pd.DataFrame(ETFList).T
+ETFs.columns = ticks
+
+
+# In[3]:
+
+
+df_return = pd.DataFrame()
+df_return['DATE']=ETFs.index[1:]
+for i in ETFs[1:]:
+    nlist = list(ETFs[i])
+    ret = [0]*(len(nlist)-1)
+    for j in range(len(ret)):
+        ret[j] = np.log(nlist[j+1]/nlist[j])
+        df_return[i] = ret
+df_return
+
+
+# In[4]:
+
+
+# etfs as predict y
+ETFs = ETFs.reset_index()
+ETFs = ETFs.rename(columns={'Date':'DATE'})
+
+ETFs['DATE'] = pd.to_datetime(ETFs['DATE'])
+
+ETFs
+
+# ETFs = ETFs.drop(['index'],axis=1)
+# ETFs = ETFs.drop(['level_0'],axis =1)
+
+
+# In[5]:
+
+
+Oil = pd.read_csv('oil.csv')   #DCOILWTICO
+CFNAI = pd.read_csv('CFNAI.csv') #CFNAI
+Dollar = pd.read_csv('dollar.csv') #DTWEXBGS
+T102Y = pd.read_csv('T10Y2Y.csv') #T10Y2Y
+IG = pd.read_csv('IG.csv') #BAMLC0A4CBBBEY
+HY = pd.read_csv('HY.csv') #BAMLH0A0HYM2
+DGS10 = pd.read_csv('US 10yr bond yield.csv') #DGS10
+Gold = pd.read_csv('gold.csv')
+
+
+# In[6]:
+
+
+Oil['DATE'] = pd.to_datetime(Oil['DATE'])
+CFNAI['DATE'] = pd.to_datetime(CFNAI['DATE'])
+Dollar['DATE'] = pd.to_datetime(Dollar['DATE'])
+T102Y['DATE'] = pd.to_datetime(T102Y['DATE'])
+IG['DATE'] = pd.to_datetime(IG['DATE'])
+HY['DATE'] = pd.to_datetime(HY['DATE'])
+DGS10['DATE'] = pd.to_datetime(DGS10['DATE'])
+Gold['DATE'] = pd.to_datetime(Gold['DATE'])
+
+
+# In[7]:
+
+
+CFNAI = CFNAI.set_index('DATE').resample('D').ffill()
+CFNAI = CFNAI[:-1]
+
+
+# In[8]:
+
+
+# etfs as y
+macro = [Oil,CFNAI,Dollar,T102Y,IG,HY,DGS10]
+macro_final = Gold
+for i in macro:
+    macro_final = macro_final.merge(i, on=['DATE'])
+    
+data = macro_final.merge(ETFs,on=['DATE'])
+data = data.replace('.',np.nan).dropna()
+data = data.reset_index()
+
+
+# In[9]:
+
+
+return_cols = ['XLF',
+               'XLE',
+               'XLU',
+               'XLI',
+               'XLK',
+               'XLP',
+               'XLY',
+               'XLB']
+factor_cols = ['OIL','GOLD','DOLLAR','US10yrbond','CFNAI','T10Y2Y','IG','HY']
+
+
+# In[10]:
+
+
+
+
+x = data[factor_cols]
+y = data[return_cols]
+x = x.astype('float')
+y = y.astype('float')
+
+# Standardise input data
+#x_norm = StandardScaler().fit_transform(x)
+x_norm = (x-np.mean(x))/np.std(x)
+x_norm = pd.concat([data['DATE'],x_norm], axis=1)
+x_norm.reset_index=(True)
+
+y = pd.concat([data['DATE'],y], axis=1)
+y.reset_index=(True)
+
+
+# In[11]:
+
+
+# Shift, so y is one day later than x
+x_norm = x_norm[:-1]
+y = y[1:]
+
+
+# In[12]:
+
+
+ETFs = ETFs.drop(['DATE'],axis =1)
+
+
+# In[13]:
+
+
+ETFs
+
+
+# # Risk Free
+
+# In[17]:
+
+
+rf = pd.read_csv('/Users/ryan_feng/Downloads/data_new4.2/^TNX.csv')
+rf = rf.dropna()
+Rf = rf['Adj Close'].mean()/100
+Rf
+
+
+# In[ ]:
+
+
+
+
+
+# # Heatmap
+
+# In[18]:
+
+
+y.index = range(0,len(y))
+factors = x_norm
+factors[return_cols] = y.iloc[:,1:]
+factors
+
+
+# In[19]:
+
+
+corr = factors.corr()
+corr_2 = abs(corr)
+
+
+# In[20]:
+
+
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
+import matplotlib.pyplot as plt
+
+sns.set(font_scale=1)
+sns.set_context({"figure.figsize":(16,16)})
+
+mask = np.zeros_like(corr_2)
+mask[np.triu_indices_from(mask)] = True
+
+with sns.axes_style("white"):
+    sns.heatmap(corr_2, square = True, mask=mask,vmax =1,vmin = 0, annot=True,center =0,annot_kws = {'size':12, 'weight':'bold'},cmap = 'RdBu_r')
+
+
+# In[21]:
+
+
+mask = np.zeros_like(corr)
+mask[np.triu_indices_from(mask)] = True
+
+with sns.axes_style("white"):
+    sns.heatmap(corr, square = True, mask=mask,vmax =1,vmin = -1, annot=True,center =0,annot_kws = {'size':12, 'weight':'bold'},cmap = 'RdBu_r')
+
+
+# # Train and Test Split
+
+# In[22]:
+
+
+train_part = 0.8
+# Show the end day of train dataset
+data['DATE'].iloc[(int(len(x_norm)*train_part))]
+
+
+# In[23]:
+
+
+# split_index = x_norm[x_norm['DATE'] == '2016-08-26'].index.tolist()[0]
+# Use the split index to split data
+split_index = int(len(x_norm)*train_part)
+x_norm = x_norm.iloc[:,0:9]
+x_norm
+
+
+# In[24]:
+
+
+# Split dataset into training set and test test: 0.6 for train and 0.4 for test
+x_train = x_norm[:split_index].reset_index().drop(['DATE','index'],axis=1)
+x_test = x_norm[split_index:].reset_index().drop(['DATE','index'],axis=1)
+
+
+# In[25]:
+
+
+# 60% x_train used for train, x_test_1 20% for in sample, x_test_2 20% for out sample
+x_test_1 = x_train[int(len(x_train)*0.75):]
+x_test_2 = x_test[int(len(x_test)/2):]
+
+
+# In[26]:
+
+
+y_train = y[:split_index].reset_index().drop(['DATE','index'],axis=1)
+y_test = y[split_index:].reset_index().drop(['DATE','index'],axis=1)
+
+
+# In[27]:
+
+
+# 60% y_train used for train, y_test_1 20% for in sample, y_test_2 20% for out sample
+y_test_1 = y_train[int(len(y_train)*0.75):]
+y_test_2 = y_test[int(len(y_test)/2):]
+
+
+# In[28]:
+
+
+# x_train, x_test, y_return_train, y_return_test = train_test_split(x_discrete.iloc[:,0:7], y_return1, test_size=0.4,random_state=default_seed) 
+# x_test, x_val, y_return_test, y_return_val = train_test_split(x_test, y_return_test, test_size=0.5,random_state=default_seed)
+
+
+# In[ ]:
+
+
+
+
+
+# In[29]:
+
+
+# K-fold to find the best parameter in models
+n_fold = 5
+n_jobs = -1
+# kf = KFold(n_splits=k, shuffle=True, random_state=1)
+
+
+# In[30]:
+
+
+# y train return
+y_train_ret = pd.DataFrame()
+
+for i in y_train[1:]:
+    nlist = list(y_train[i])
+    ret = [0]*(len(nlist)-1)
+    for j in range(len(ret)):
+        ret[j] = np.log(nlist[j+1]/nlist[j])
+        y_train_ret[i] = ret
+
+# y_test_1 return
+y_test_ret_1 = pd.DataFrame()
+
+for i in y_test_1[1:]:
+    nlist = list(y_test_1[i])
+    ret = [0]*(len(nlist)-1)
+    for j in range(len(ret)):
+        ret[j] = np.log(nlist[j+1]/nlist[j])
+        y_test_ret_1[i] = ret
+
+        
+# y_test_2 return
+y_test_ret_2 = pd.DataFrame()
+
+for i in y_test_2[1:]:
+    nlist = list(y_test_2[i])
+    ret = [0]*(len(nlist)-1)
+    for j in range(len(ret)):
+        ret[j] = np.log(nlist[j+1]/nlist[j])
+        y_test_ret_2[i] = ret
+
+
+# # For dates
+
+# In[31]:
+
+
+# To plot, we remain the date
+x_train_date = x_norm[:split_index]
+# x_train_date.set_index(['DATE'],inplace=True)
+
+x_test_date= x_norm[split_index:]
+# x_test_date.set_index(['DATE'],inplace=True)
+
+
+# In[32]:
+
+
+x_test_date_1 = x_train_date[int(len(x_train_date)*0.75):]
+x_test_date_2 = x_test_date[int(len(x_test_date)/2):]
+
+
+# In[33]:
+
+
+y_train_date = y[:split_index]
+# y_train_date.set_index(['DATE'],inplace=True)
+
+y_test_date = y[split_index:]
+# y_test_date.set_index(['DATE'],inplace=True)
+
+
+# In[34]:
+
+
+y_test_date_1 = y_train_date[int(len(y_train_date)*0.75):].reset_index()
+y_test_date_2 = y_test_date[int(len(y_test_date)/2):].reset_index()
+
+
+# In[35]:
+
+
+x_train_date_ret = pd.DataFrame(x_train_date['DATE'])[1:].reset_index().drop(['index'],axis=1)
+x_test_date_ret = pd.DataFrame(x_test_date['DATE'])[1:].reset_index().drop(['index'],axis=1)
+y_train_date_ret = pd.DataFrame(y_train_date['DATE'])[1:].reset_index().drop(['index'],axis=1)
+y_test_date_ret = pd.DataFrame(y_test_date['DATE'])[1:].reset_index().drop(['index'],axis=1)
+
+
+# In[36]:
+
+
+y_test_date_ret_1 = y_train_date_ret[int(len(y_train_date_ret)*0.75):][1:].reset_index()
+
+
+# In[37]:
+
+
+y_test_date_ret_1
+
+
+# In[38]:
+
+
+y_test_date_ret_2 = y_test_date_ret[:int(len(y_test_date_ret))].reset_index()
+
+
+# In[39]:
+
+
+y_test_date_ret_2
+
+
+# # Linear
+
+# In[40]:
+
+
+import statsmodels.api as sm
+from sklearn.metrics import mean_squared_error
+model_l = []
+y_pred=[]
+mse = []
+for i in range(8):
+    model = sm.OLS(y_train.iloc[:,i],x_train)
+    model_l.append(model.fit())
+    print(model_l[i].summary())
+    y_pred.append(model.fit().predict(x_test_1))
+    mse.append(mean_squared_error(y_test.iloc[:,i], y_pred[i]))
+
+
+# # Linear test (out sample)
+
+# In[41]:
+
+
+# Linear Regression
+lin_result_price = pd.DataFrame()
+for col in ETFs:
+    lin = LinearRegression()
+    lin.fit(x_train,y_train[col])
+    y_pred_lin = pd.DataFrame(lin.predict(x_test_2))
+    lin_result_price = pd.concat([lin_result_price,y_pred_lin],axis=1)
+    
+lin_result_price.columns = y_test.columns
+display(lin_result_price)
+
+
+# In[42]:
+
+
+# Linear: predict price first, then return
+lin_etf_return = pd.DataFrame()
+
+for i in lin_result_price[1:]:
+    nlist = list(lin_result_price[i])
+    ret = [0]*(len(nlist)-1)
+    for j in range(len(ret)):
+        ret[j] = np.log(nlist[j+1]/nlist[j])
+        lin_etf_return[i] = ret
+lin_etf_return
+lin_result = lin_etf_return
+
+
+# In[43]:
+
+
+lin_result
+
+
+# In[44]:
+
+
+
+lin_ret_mse_out = mean_squared_error(y_test_ret_2,lin_result)
+print('The MSE of out sample set under the linear model is:',lin_ret_mse_out)
+
+
+# In[45]:
+
+
+# for monthly calculation
+lin_result_2 = copy.deepcopy(lin_result)
+
+
+# In[46]:
+
+
+lin_result_2['DATE']=y_test_date_ret_2['DATE']
+
+
+# In[47]:
+
+
+lin_result_2['month'] = pd.to_datetime(lin_result_2['DATE']).dt.month
+lin_result_2['year'] = pd.to_datetime(lin_result_2['DATE']).dt.year
+lin_result_2 = lin_result_2.groupby(['year','month'],as_index=False).mean()
+
+
+# In[48]:
+
+
+lin_result_3 = lin_result_2[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+lin_result_3 = lin_result_3.T
+lin_result_3
+
+
+# In[49]:
+
+
+index_1_lin = []
+index_2_lin = []
+
+for i in range(len(lin_result_2)):
+    index_1_lin.append(lin_result_3.iloc[:,i].nlargest(3).index)
+    index_2_lin.append(lin_result_3.iloc[:,i].nsmallest(3).index)
+
+
+# In[50]:
+
+
+lin_big = np.array(list(index_1_lin))
+lin_small = np.array(list(index_2_lin))
+
+
+# In[51]:
+
+
+y_test_ret_lin = copy.deepcopy(y_test_ret_2)
+
+
+# In[52]:
+
+
+y_test_ret_lin['DATE']=y_test_date_ret_2['DATE']
+
+
+# In[53]:
+
+
+y_test_ret_lin
+
+
+# In[54]:
+
+
+y_test_ret_lin['month'] = pd.to_datetime(y_test_ret_lin['DATE']).dt.month
+y_test_ret_lin['year'] = pd.to_datetime(y_test_ret_lin['DATE']).dt.year
+y_test_ret_lin = y_test_ret_lin.groupby(['year','month'],as_index=False).mean()
+
+
+# In[55]:
+
+
+y_test_ret_lin = y_test_ret_lin[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+y_test_ret_lin_2 = y_test_ret_lin.T
+
+
+# In[56]:
+
+
+y_test_ret_lin['wret_XLF'] = [0]*len(y_test_ret_lin)
+y_test_ret_lin['wret_XLE'] = [0]*len(y_test_ret_lin)
+y_test_ret_lin['wret_XLU'] = [0]*len(y_test_ret_lin)
+y_test_ret_lin['wret_XLI'] = [0]*len(y_test_ret_lin)
+y_test_ret_lin['wret_XLK'] = [0]*len(y_test_ret_lin)
+y_test_ret_lin['wret_XLP'] = [0]*len(y_test_ret_lin)
+y_test_ret_lin['wret_XLY'] = [0]*len(y_test_ret_lin)
+y_test_ret_lin['wret_XLB'] = [0]*len(y_test_ret_lin)
+
+list_lin = ['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']
+
+
+# In[57]:
+
+
+y_test_ret_lin
+
+
+# In[58]:
+
+
+for j in range(len(y_test_ret_lin)):
+    for i in list_lin:
+        if i in lin_big[j]:
+            y_test_ret_lin['wret_'+i].loc[j] = 1
+        elif i in lin_small[j]:
+            y_test_ret_lin['wret_'+i].loc[j] = -1
+        else:
+            y_test_ret_lin['wret_'+i].loc[j] = 0
+
+
+# In[59]:
+
+
+y_test_ret_lin['lin_portfolio_ret'] = y_test_ret_lin['XLF']*y_test_ret_lin['wret_XLF']+y_test_ret_lin['XLE']*y_test_ret_lin['wret_XLE']+y_test_ret_lin['XLU']*y_test_ret_lin['wret_XLU']+y_test_ret_lin['XLI']*y_test_ret_lin['wret_XLI']+y_test_ret_lin['XLK']*y_test_ret_lin['wret_XLK']+y_test_ret_lin['XLP']*y_test_ret_lin['wret_XLP']+y_test_ret_lin['XLY']*y_test_ret_lin['wret_XLY']+y_test_ret_lin['XLB']*y_test_ret_lin['wret_XLB']
+
+
+# In[60]:
+
+
+y_test_ret_lin
+
+
+# # Linear Train (in sample)
+
+# In[61]:
+
+
+lin_result_price_train = pd.DataFrame()
+for col in ETFs:
+    lin = LinearRegression()
+    lin.fit(x_train,y_train[col])
+    y_pred_lin_train = pd.DataFrame(lin.predict(x_test_1))
+    lin_result_price_train = pd.concat([lin_result_price_train,y_pred_lin_train],axis=1)
+    
+lin_result_price_train.columns = y_test.columns
+display(lin_result_price_train)
+
+
+# In[62]:
+
+
+lin_etf_return_train = pd.DataFrame()
+
+for i in lin_result_price_train[1:]:
+    nlist = list(lin_result_price_train[i])
+    ret = [0]*(len(nlist)-1)
+    for j in range(len(ret)):
+        ret[j] = np.log(nlist[j+1]/nlist[j])
+        lin_etf_return_train[i] = ret
+lin_etf_return_train
+lin_result_train = lin_etf_return_train
+
+
+# In[63]:
+
+
+lin_result_train
+
+
+# In[64]:
+
+
+lin_ret_mse_in = mean_squared_error(y_test_ret_1,lin_result_train)
+print('The MSE of in-sample set under the linear model is:',lin_ret_mse_in)
+
+
+# In[65]:
+
+
+lin_result_train_2 = copy.deepcopy(lin_result_train)
+
+
+# In[66]:
+
+
+lin_result_train_2['DATE']=y_test_date_ret_1['DATE']
+
+
+# In[67]:
+
+
+lin_result_train_2['month'] = pd.to_datetime(lin_result_train_2['DATE']).dt.month
+lin_result_train_2['year'] = pd.to_datetime(lin_result_train_2['DATE']).dt.year
+lin_result_train_2 = lin_result_train_2.groupby(['year','month'],as_index=False).mean()
+
+
+# In[68]:
+
+
+lin_result_train_3 = lin_result_train_2[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+lin_result_train_3 = lin_result_train_3.T
+lin_result_train_3
+
+
+# In[69]:
+
+
+index_1_lin_train = []
+index_2_lin_train = []
+
+for i in range(len(lin_result_train_2)):
+    index_1_lin_train.append(lin_result_train_3.iloc[:,i].nlargest(3).index)
+    index_2_lin_train.append(lin_result_train_3.iloc[:,i].nsmallest(3).index)
+
+
+# In[70]:
+
+
+lin_big_train = np.array(list(index_1_lin_train))
+lin_small_train = np.array(list(index_2_lin_train))
+
+
+# In[71]:
+
+
+y_train_ret_lin = copy.deepcopy(y_test_ret_1)
+
+
+# In[72]:
+
+
+y_train_ret_lin['DATE']=y_test_date_ret_1['DATE']
+
+
+# In[73]:
+
+
+y_train_ret_lin
+
+
+# In[74]:
+
+
+y_train_ret_lin['month'] = pd.to_datetime(y_train_ret_lin['DATE']).dt.month
+y_train_ret_lin['year'] = pd.to_datetime(y_train_ret_lin['DATE']).dt.year
+y_train_ret_lin = y_train_ret_lin.groupby(['year','month'],as_index=False).mean()
+
+
+# In[75]:
+
+
+y_train_ret_lin = y_train_ret_lin[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+y_train_ret_lin_2 = y_train_ret_lin.T
+
+
+# In[76]:
+
+
+y_train_ret_lin['wret_XLF'] = [0]*len(y_train_ret_lin)
+y_train_ret_lin['wret_XLE'] = [0]*len(y_train_ret_lin)
+y_train_ret_lin['wret_XLU'] = [0]*len(y_train_ret_lin)
+y_train_ret_lin['wret_XLI'] = [0]*len(y_train_ret_lin)
+y_train_ret_lin['wret_XLK'] = [0]*len(y_train_ret_lin)
+y_train_ret_lin['wret_XLP'] = [0]*len(y_train_ret_lin)
+y_train_ret_lin['wret_XLY'] = [0]*len(y_train_ret_lin)
+y_train_ret_lin['wret_XLB'] = [0]*len(y_train_ret_lin)
+
+list_lin_train = ['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']
+
+
+# In[77]:
+
+
+for j in range(len(y_train_ret_lin)):
+    for i in list_lin_train:
+        if i in lin_big_train[j]:
+            y_train_ret_lin['wret_'+i].loc[j] = 1
+        elif i in lin_small_train[j]:
+            y_train_ret_lin['wret_'+i].loc[j] = -1
+        else:
+            y_train_ret_lin['wret_'+i].loc[j] = 0
+
+
+# In[78]:
+
+
+y_train_ret_lin['lin_portfolio_ret'] = y_train_ret_lin['XLF']*y_train_ret_lin['wret_XLF']+y_train_ret_lin['XLE']*y_train_ret_lin['wret_XLE']+y_train_ret_lin['XLU']*y_train_ret_lin['wret_XLU']+y_train_ret_lin['XLI']*y_train_ret_lin['wret_XLI']+y_train_ret_lin['XLK']*y_train_ret_lin['wret_XLK']+y_train_ret_lin['XLP']*y_train_ret_lin['wret_XLP']+y_train_ret_lin['XLY']*y_train_ret_lin['wret_XLY']+y_train_ret_lin['XLB']*y_train_ret_lin['wret_XLB']
+
+
+# In[79]:
+
+
+y_train_ret_lin
+
+
+# # Linear Results
+
+# In[80]:
+
+
+in_annual_return_1in = 12/len(y_train_ret_lin) * np.sum(y_train_ret_lin['lin_portfolio_ret'])
+out_annual_return_1in = 12/(len(y_test_ret_lin)) * np.sum(y_test_ret_lin['lin_portfolio_ret'])
+
+print('Annualized return (in sample) in linear model is :', in_annual_return_1in)
+print('Annualized return (out of sample) in linear model is :', out_annual_return_1in)
+
+
+# In[81]:
+
+
+in_annual_risk_lin = (12**0.5)*np.std(y_train_ret_lin['lin_portfolio_ret'])
+out_annual_risk_lin = (12**0.5)*np.std(y_test_ret_lin['lin_portfolio_ret'])
+
+print('Annualized risk (in sample) in linear model is: ', in_annual_risk_lin)
+print('Annualized risk (out of sample) in linear model is: ', out_annual_risk_lin)
+
+
+# In[82]:
+
+
+in_annual_sharpe_lin = (in_annual_return_1in-Rf)/in_annual_risk_lin
+out_annual_sharpe_lin = (out_annual_return_1in-Rf)/out_annual_risk_lin
+
+print('Annualized sharpe ratio (in sample) in linear model is: ', in_annual_sharpe_lin)
+print('Annualized sharpe ratio (out of sample) in linear model is: ', out_annual_sharpe_lin)
+
+
+# In[83]:
+
+
+y_train_ret_lin_month = copy.deepcopy(y_train_ret_lin)
+
+
+# In[84]:
+
+
+y_train_ret_lin_month = pd.concat([lin_result_train_2[['year','month']],y_train_ret_lin_month],axis =1)
+
+
+# In[85]:
+
+
+y_train_ret_lin_month
+
+
+# In[86]:
+
+
+y_test_ret_lin_month = copy.deepcopy(y_test_ret_lin)
+
+
+# In[87]:
+
+
+y_test_ret_lin_month = pd.concat([lin_result_2[['year','month']],y_test_ret_lin_month],axis =1)
+y_test_ret_lin_month = y_test_ret_lin_month[1:]
+
+
+# In[88]:
+
+
+df1 = pd.concat([y_train_ret_lin_month,y_test_ret_lin_month],axis = 0).reset_index(inplace=False)
+
+
+# In[89]:
+
+
+df1
+
+
+# In[90]:
+
+
+F = 0
+E = 0
+U = 0
+I = 0
+K = 0
+P = 0
+Y = 0
+B = 0
+turn_over_lin = 0
+
+for i in range(len(df1)-1):
+    F = df1['wret_XLF'][i]*df1['XLF'][i+1] 
+    E = df1['wret_XLE'][i]*df1['XLE'][i+1] 
+    U = df1['wret_XLU'][i]*df1['XLU'][i+1] 
+    I = df1['wret_XLI'][i]*df1['XLI'][i+1]
+    K = df1['wret_XLK'][i]*df1['XLK'][i+1] 
+    P = df1['wret_XLP'][i]*df1['XLP'][i+1] 
+    Y = df1['wret_XLY'][i]*df1['XLY'][i+1] 
+    B = df1['wret_XLB'][i]*df1['XLB'][i+1]
+    J = F+E+U+I+K+P+Y+B
+    
+    turn_over_lin += (np.abs(df1['wret_XLF'][i+1] - (df1['wret_XLF'][i]*(1+df1['XLF'][i+1]))/(1+J))+np.abs(df1['wret_XLE'][i+1] - (df1['wret_XLE'][i]*(1+df1['XLE'][i+1]))/(1+J))+np.abs(df1['wret_XLU'][i+1] - (df1['wret_XLU'][i]*(1+df1['XLU'][i+1]))/(1+J))+np.abs(df1['wret_XLI'][i+1] - (df1['wret_XLI'][i]*(1+df1['XLI'][i+1]))/(1+J))+np.abs(df1['wret_XLK'][i+1] - (df1['wret_XLK'][i]*(1+df1['XLK'][i+1]))/(1+J))+np.abs(df1['wret_XLP'][i+1] - (df1['wret_XLP'][i]*(1+df1['XLP'][i+1]))/(1+J))+np.abs(df1['wret_XLY'][i+1] - (df1['wret_XLY'][i]*(1+df1['XLY'][i+1]))/(1+J))+np.abs(df1['wret_XLB'][i+1] - (df1['wret_XLB'][i]*(1+df1['XLB'][i+1]))/(1+J)))/12
+  
+print('The average monthly turnover in linear model is: ', (1/len(df1)) * turn_over_lin)
+
+
+# In[ ]:
+
+
+
+
+
+# #  Linear: Portfolio not changed
+
+# In[91]:
+
+
+lin_mean= pd.DataFrame(lin_result.mean(axis=0))
+lin_mean.columns=['lin_mean_ret']
+
+# Ranking
+lin_mean = lin_mean.sort_values(by='lin_mean_ret', ascending=False)
+
+# Long ETFs in linear model
+lin_long = list(lin_mean.head(3).T.columns)
+# Short ETFs in linear model
+lin_short = list(lin_mean.tail(3).T.columns)
+
+lin_weights = 1/6
+portfolio_lin_test = pd.DataFrame()
+portfolio_lin_train = pd.DataFrame()
+lin = lin_long + lin_short
+
+
+# In[503]:
+
+
+# In sample
+for i in lin:
+    portfolio_lin_train[i] = lin_weights*y_train_ret[i]
+portfolio_lin_train['lin_portfolio_ret'] = portfolio_lin_train.iloc[:,:3].apply(lambda x:x.sum(),axis=1)-portfolio_lin_train.iloc[:,3:].apply(lambda x:x.sum(),axis=1)
+display(portfolio_lin_train)
+
+Ann_ret_lin_in = (365/len(portfolio_lin_train)*np.sum(portfolio_lin_train['lin_portfolio_ret']))
+print('The annulised return in sample in linear regression is: ',Ann_ret_lin_in)
+
+Ann_std_lin_in=(365**(1/2))*np.std(portfolio_lin_train['lin_portfolio_ret'])
+Rf
+Ann_sharpe_lin_in = (Ann_ret_lin_in-Rf)/Ann_std_lin_in
+print('The annulised sharpe ratio in sample in linear regression is: ',Ann_sharpe_lin_in)
+
+
+# In[504]:
+
+
+# Out sample
+for i in lin:
+    portfolio_lin_test[i] = lin_weights*y_test_ret_2[i]
+portfolio_lin_test['lin_portfolio_ret'] = portfolio_lin_test.iloc[:,:3].apply(lambda x:x.sum(),axis=1)-portfolio_lin_test.iloc[:,3:].apply(lambda x:x.sum(),axis=1)
+display(portfolio_lin_test)
+
+Ann_ret_lin_out = (365/len(portfolio_lin_test)*np.sum(portfolio_lin_test['lin_portfolio_ret']))
+print('The annulised return out of sample in linear regression is: ',Ann_ret_lin_out)
+
+Ann_std_lin_out=(365**(1/2))*np.std(portfolio_lin_test['lin_portfolio_ret'])
+Rf = 0.0162
+Ann_sharpe_lin_out = (Ann_ret_lin_out-Rf)/Ann_std_lin_out
+print('The annulised sharpe ratio out of sample in linear regression is: ',Ann_sharpe_lin_out)
+
+
+# In[505]:
+
+
+# Ann_ret_lin_out= np.sum(portfolio_test['portfolio_return']+1)**(12/len(portfolio_test)) -1
+# Ann_ret_lin_out
+
+
+# In[ ]:
+
+
+
+
+
+# # Ridge out sample
+
+# In[173]:
+
+
+get_ipython().run_cell_magic('time', '', "# Ridge\nridge_result_price = pd.DataFrame()\nfor col in ETFs:\n    ridge = Ridge()\n    \n    alphas = np.linspace(0.1, 10, 500)\n    time_cv_ridge = TimeSeriesSplit(n_splits=5).split(x_train)\n    \n    \n    parameters = {'alpha': alphas}\n    gs_ridge = GridSearchCV(ridge, parameters, cv=time_cv_ridge, n_jobs =-1,refit=True, \n                            scoring = 'neg_mean_squared_error', verbose=2)\n    gs_ridge.fit(x_train, y_train[col])\n    alpha_ridge = gs_ridge.best_params_\n    print('Best alpha is: ',alpha_ridge)\n    print('Best Score is: ',gs_ridge.best_score_)\n    \n    ridge = Ridge(alpha=alpha_ridge['alpha'])\n    ridge.fit(x_train,y_train[col])\n    y_pred_ridge = pd.DataFrame(ridge.predict(x_test_2))\n    ridge_result_price = pd.concat([ridge_result_price,y_pred_ridge],axis=1)\n    \n#     ridge_result = pd.DataFrame(y_pred_ridge,columns = y_test.columns)\nridge_result_price.columns = y_test.columns\ndisplay(ridge_result_price)")
+
+
+# In[174]:
+
+
+# Ridge: predict price first, then return
+ridge_etf_return = pd.DataFrame()
+
+for i in ridge_result_price[1:]:
+    nlist = list(ridge_result_price[i])
+    ret = [0]*(len(nlist)-1)
+    for j in range(len(ret)):
+        ret[j] = np.log(nlist[j+1]/nlist[j])
+        ridge_etf_return[i] = ret
+ridge_etf_return
+ridge_result = ridge_etf_return
+
+
+# In[175]:
+
+
+ridge_result
+
+
+# In[176]:
+
+
+ridge_ret_mse_out = mean_squared_error(y_test_ret_2,ridge_result)
+print('The MSE of out sample set under the ridge model is:',ridge_ret_mse_out)
+
+
+# In[177]:
+
+
+ridge_result_2 = copy.deepcopy(ridge_result)
+
+
+# In[178]:
+
+
+ridge_result_2['DATE']=y_test_date_ret_2['DATE']
+
+
+# In[179]:
+
+
+ridge_result_2['month'] = pd.to_datetime(ridge_result_2['DATE']).dt.month
+ridge_result_2['year'] = pd.to_datetime(ridge_result_2['DATE']).dt.year
+ridge_result_2 = ridge_result_2.groupby(['year','month'],as_index=False).mean()
+
+
+# In[180]:
+
+
+ridge_result_3 = ridge_result_2[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+ridge_result_3 = ridge_result_3.T
+ridge_result_3
+
+
+# In[181]:
+
+
+index_1_ridge = []
+index_2_ridge = []
+
+for i in range(len(ridge_result_2)):
+    index_1_ridge.append(ridge_result_3.iloc[:,i].nlargest(3).index)
+    index_2_ridge.append(ridge_result_3.iloc[:,i].nsmallest(3).index)
+
+
+# In[182]:
+
+
+ridge_big = np.array(list(index_1_ridge))
+ridge_small = np.array(list(index_2_ridge))
+
+
+# In[183]:
+
+
+y_test_ret_ridge = copy.deepcopy(y_test_ret_2)
+
+
+# In[184]:
+
+
+y_test_ret_ridge['DATE']=y_test_date_ret_2['DATE']
+
+
+# In[185]:
+
+
+y_test_ret_ridge['month'] = pd.to_datetime(y_test_ret_ridge['DATE']).dt.month
+y_test_ret_ridge['year'] = pd.to_datetime(y_test_ret_ridge['DATE']).dt.year
+y_test_ret_ridge = y_test_ret_ridge.groupby(['year','month'],as_index=False).mean()
+
+
+# In[186]:
+
+
+y_test_ret_ridge = y_test_ret_ridge[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+y_test_ret_ridge_2 = y_test_ret_ridge.T
+
+
+# In[187]:
+
+
+y_test_ret_ridge['wret_XLF'] = [0]*len(y_test_ret_ridge)
+y_test_ret_ridge['wret_XLE'] = [0]*len(y_test_ret_ridge)
+y_test_ret_ridge['wret_XLU'] = [0]*len(y_test_ret_ridge)
+y_test_ret_ridge['wret_XLI'] = [0]*len(y_test_ret_ridge)
+y_test_ret_ridge['wret_XLK'] = [0]*len(y_test_ret_ridge)
+y_test_ret_ridge['wret_XLP'] = [0]*len(y_test_ret_ridge)
+y_test_ret_ridge['wret_XLY'] = [0]*len(y_test_ret_ridge)
+y_test_ret_ridge['wret_XLB'] = [0]*len(y_test_ret_ridge)
+
+list_ridge = ['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']
+
+
+# In[188]:
+
+
+for j in range(len(y_test_ret_ridge)):
+    for i in list_ridge:
+        if i in ridge_big[j]:
+            y_test_ret_ridge['wret_'+i].loc[j] = 1
+        elif i in ridge_small[j]:
+            y_test_ret_ridge['wret_'+i].loc[j] = -1
+        else:
+            y_test_ret_ridge['wret_'+i].loc[j] = 0
+
+
+# In[189]:
+
+
+y_test_ret_ridge['ridge_portfolio_ret'] = y_test_ret_ridge['XLF']*y_test_ret_ridge['wret_XLF']+y_test_ret_ridge['XLE']*y_test_ret_ridge['wret_XLE']+y_test_ret_ridge['XLU']*y_test_ret_ridge['wret_XLU']+y_test_ret_ridge['XLI']*y_test_ret_ridge['wret_XLI']+y_test_ret_ridge['XLK']*y_test_ret_ridge['wret_XLK']+y_test_ret_ridge['XLP']*y_test_ret_ridge['wret_XLP']+y_test_ret_ridge['XLY']*y_test_ret_ridge['wret_XLY']+y_test_ret_ridge['XLB']*y_test_ret_ridge['wret_XLB']
+
+
+# In[190]:
+
+
+y_test_ret_ridge
+
+
+# # Ridge in sample
+
+# In[191]:
+
+
+get_ipython().run_cell_magic('time', '', "# Ridge\nridge_result_price_train = pd.DataFrame()\nfor col in ETFs:\n    ridge = Ridge()\n    \n    alphas = np.linspace(0.1, 10, 500)\n    time_cv_ridge = TimeSeriesSplit(n_splits=5).split(x_train)\n    \n    \n    parameters = {'alpha': alphas}\n    gs_ridge = GridSearchCV(ridge, parameters, cv=time_cv_ridge, n_jobs =-1,refit=True, \n                            scoring = 'neg_mean_squared_error', verbose=2)\n    gs_ridge.fit(x_train, y_train[col])\n    alpha_ridge = gs_ridge.best_params_\n    print('Best alpha is: ',alpha_ridge)\n    print('Best Score is: ',gs_ridge.best_score_)\n    \n    ridge = Ridge(alpha=alpha_ridge['alpha'])\n    ridge.fit(x_train,y_train[col])\n    y_pred_ridge_train = pd.DataFrame(ridge.predict(x_test_1))\n    ridge_result_price_train = pd.concat([ridge_result_price_train,y_pred_ridge_train],axis=1)\n    \n#     ridge_result = pd.DataFrame(y_pred_ridge,columns = y_test.columns)\nridge_result_price_train.columns = y_train.columns\ndisplay(ridge_result_price_train)")
+
+
+# In[192]:
+
+
+ridge_etf_return_train = pd.DataFrame()
+
+for i in ridge_result_price_train[1:]:
+    nlist = list(ridge_result_price_train[i])
+    ret = [0]*(len(nlist)-1)
+    for j in range(len(ret)):
+        ret[j] = np.log(nlist[j+1]/nlist[j])
+        ridge_etf_return_train[i] = ret
+ridge_etf_return_train
+ridge_result_train = ridge_etf_return_train
+
+
+# In[193]:
+
+
+ridge_result_train
+
+
+# In[194]:
+
+
+ridge_ret_mse_in = mean_squared_error(y_test_ret_1,ridge_result_train)
+print('The MSE of in sample set under the ridge model is:',ridge_ret_mse_in)
+
+
+# In[195]:
+
+
+ridge_result_train_2 = copy.deepcopy(ridge_result_train)
+
+
+# In[196]:
+
+
+ridge_result_train_2['DATE']=y_test_date_ret_1['DATE']
+
+
+# In[197]:
+
+
+ridge_result_train_2['month'] = pd.to_datetime(ridge_result_train_2['DATE']).dt.month
+ridge_result_train_2['year'] = pd.to_datetime(ridge_result_train_2['DATE']).dt.year
+ridge_result_train_2 = ridge_result_train_2.groupby(['year','month'],as_index=False).mean()
+
+
+# In[198]:
+
+
+ridge_result_train_3 = ridge_result_train_2[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+ridge_result_train_3 = ridge_result_train_3.T
+ridge_result_train_3
+
+
+# In[199]:
+
+
+index_1_ridge_train = []
+index_2_ridge_train = []
+
+for i in range(len(ridge_result_train_2)):
+    index_1_ridge_train.append(ridge_result_train_3.iloc[:,i].nlargest(3).index)
+    index_2_ridge_train.append(ridge_result_train_3.iloc[:,i].nsmallest(3).index)
+
+
+# In[200]:
+
+
+ridge_big_train = np.array(list(index_1_ridge_train))
+ridge_small_train = np.array(list(index_2_ridge_train))
+
+
+# In[201]:
+
+
+y_train_ret_ridge = copy.deepcopy(y_test_ret_1)
+
+
+# In[202]:
+
+
+y_train_ret_ridge['DATE']=y_test_date_ret_1['DATE']
+
+
+# In[203]:
+
+
+y_train_ret_ridge['month'] = pd.to_datetime(y_train_ret_ridge['DATE']).dt.month
+y_train_ret_ridge['year'] = pd.to_datetime(y_train_ret_ridge['DATE']).dt.year
+y_train_ret_ridge = y_train_ret_ridge.groupby(['year','month'],as_index=False).mean()
+
+
+# In[204]:
+
+
+y_train_ret_ridge = y_train_ret_ridge[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+y_train_ret_ridge_2 = y_train_ret_ridge.T
+
+
+# In[205]:
+
+
+y_train_ret_ridge['wret_XLF'] = [0]*len(y_train_ret_ridge)
+y_train_ret_ridge['wret_XLE'] = [0]*len(y_train_ret_ridge)
+y_train_ret_ridge['wret_XLU'] = [0]*len(y_train_ret_ridge)
+y_train_ret_ridge['wret_XLI'] = [0]*len(y_train_ret_ridge)
+y_train_ret_ridge['wret_XLK'] = [0]*len(y_train_ret_ridge)
+y_train_ret_ridge['wret_XLP'] = [0]*len(y_train_ret_ridge)
+y_train_ret_ridge['wret_XLY'] = [0]*len(y_train_ret_ridge)
+y_train_ret_ridge['wret_XLB'] = [0]*len(y_train_ret_ridge)
+
+list_ridge_train = ['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']
+
+
+# In[206]:
+
+
+for j in range(len(y_train_ret_ridge)):
+    for i in list_ridge_train:
+        if i in ridge_big_train[j]:
+            y_train_ret_ridge['wret_'+i].loc[j] = 1
+        elif i in ridge_small_train[j]:
+            y_train_ret_ridge['wret_'+i].loc[j] = -1
+        else:
+            y_train_ret_ridge['wret_'+i].loc[j] = 0
+
+
+# In[207]:
+
+
+y_train_ret_ridge['ridge_portfolio_ret'] = y_train_ret_ridge['XLF']*y_train_ret_ridge['wret_XLF']+y_train_ret_ridge['XLE']*y_train_ret_ridge['wret_XLE']+y_train_ret_ridge['XLU']*y_train_ret_ridge['wret_XLU']+y_train_ret_ridge['XLI']*y_train_ret_ridge['wret_XLI']+y_train_ret_ridge['XLK']*y_train_ret_ridge['wret_XLK']+y_train_ret_ridge['XLP']*y_train_ret_ridge['wret_XLP']+y_train_ret_ridge['XLY']*y_train_ret_ridge['wret_XLY']+y_train_ret_ridge['XLB']*y_train_ret_ridge['wret_XLB']
+
+
+# In[208]:
+
+
+y_train_ret_ridge
+
+
+# # Ridge Results
+
+# In[209]:
+
+
+in_annual_return_ridge = 12/(len(y_train_ret_ridge)) * y_train_ret_ridge['ridge_portfolio_ret'].sum()
+out_annual_return_ridge = 12/(len(y_test_ret_ridge)) * y_test_ret_ridge['ridge_portfolio_ret'].sum()
+
+print('Annualized return (in sample) in ridge model is: ', in_annual_return_ridge)
+print('Annualized return (out of sample) in ridge model is: ', out_annual_return_ridge)
+
+
+# In[210]:
+
+
+in_annual_risk_ridge = (12**0.5)*np.std(y_train_ret_ridge['ridge_portfolio_ret'])
+out_annual_risk_ridge = (12**0.5)*np.std(y_test_ret_ridge['ridge_portfolio_ret'])
+
+print('Annualized risk (in sample) in ridge model is: ', in_annual_risk_ridge)
+print('Annualized risk (out of sample) in ridge model is: ', out_annual_risk_ridge)
+
+
+# In[211]:
+
+
+
+in_annual_sharpe_ridge = (in_annual_return_ridge-Rf)/in_annual_risk_ridge
+out_annual_sharpe_ridge = (out_annual_return_ridge-Rf)/out_annual_risk_ridge
+
+print('Annualized sharpe ratio (in sample) in ridge model is: ', in_annual_sharpe_ridge)
+print('Annualized sharpe ratio (out of sample) in ridge model is: ', out_annual_sharpe_ridge)
+
+
+# In[212]:
+
+
+y_train_ret_ridge_month = copy.deepcopy(y_train_ret_ridge)
+y_train_ret_ridge_month = pd.concat([ridge_result_train_2[['year','month']],y_train_ret_ridge_month],axis =1)
+
+y_test_ret_ridge_month = copy.deepcopy(y_test_ret_ridge)
+y_test_ret_ridge_month = pd.concat([ridge_result_2[['year','month']],y_test_ret_ridge_month],axis =1)
+y_test_ret_ridge_month = y_test_ret_ridge_month[1:]
+
+
+# In[213]:
+
+
+df2 = pd.concat([y_train_ret_ridge_month,y_test_ret_ridge_month],axis = 0).reset_index(inplace=False)
+
+
+# In[214]:
+
+
+df2
+
+
+# In[215]:
+
+
+F = 0
+E = 0
+U = 0
+I = 0
+K = 0
+P = 0
+Y = 0
+B = 0
+turn_over_ridge = 0
+
+for i in range(len(df2)-1):
+    F = df2['wret_XLF'][i]*df2['XLF'][i+1] 
+    E = df2['wret_XLE'][i]*df2['XLE'][i+1] 
+    U = df2['wret_XLU'][i]*df2['XLU'][i+1] 
+    I = df2['wret_XLI'][i]*df2['XLI'][i+1]
+    K = df2['wret_XLK'][i]*df2['XLK'][i+1] 
+    P = df2['wret_XLP'][i]*df2['XLP'][i+1] 
+    Y = df2['wret_XLY'][i]*df2['XLY'][i+1] 
+    B = df2['wret_XLB'][i]*df2['XLB'][i+1]
+    J = F+E+U+I+K+P+Y+B
+    
+    turn_over_ridge += (np.abs(df2['wret_XLF'][i+1] - (df2['wret_XLF'][i]*(1+df2['XLF'][i+1]))/(1+J))+np.abs(df2['wret_XLE'][i+1] - (df2['wret_XLE'][i]*(1+df2['XLE'][i+1]))/(1+J))+np.abs(df2['wret_XLU'][i+1] - (df2['wret_XLU'][i]*(1+df2['XLU'][i+1]))/(1+J))+np.abs(df2['wret_XLI'][i+1] - (df2['wret_XLI'][i]*(1+df2['XLI'][i+1]))/(1+J))+np.abs(df2['wret_XLK'][i+1] - (df2['wret_XLK'][i]*(1+df2['XLK'][i+1]))/(1+J))+np.abs(df2['wret_XLP'][i+1] - (df2['wret_XLP'][i]*(1+df2['XLP'][i+1]))/(1+J))+np.abs(df2['wret_XLY'][i+1] - (df2['wret_XLY'][i]*(1+df2['XLY'][i+1]))/(1+J))+np.abs(df2['wret_XLB'][i+1] - (df2['wret_XLB'][i]*(1+df2['XLB'][i+1]))/(1+J)))/12 
+print('The average monthly turnover in ridge model is: ', (1/len(df2)) * turn_over_ridge)
+
+
+# In[ ]:
+
+
+
+
+
+# # Ridge: Portfolio unchaged
+
+# In[547]:
+
+
+ridge_mean= pd.DataFrame(ridge_result.mean(axis=0))
+ridge_mean.columns=['ridge_mean_ret']
+
+# Ranking
+ridge_mean = ridge_mean.sort_values(by='ridge_mean_ret', ascending=False)
+
+# Long ETFs in linear model
+ridge_long = list(ridge_mean.head(3).T.columns)
+# Short ETFs in linear model
+ridge_short = list(ridge_mean.tail(3).T.columns)
+
+ridge_weights = 1/6
+portfolio_ridge_test = pd.DataFrame()
+portfolio_ridge_train = pd.DataFrame()
+ridge = ridge_long + ridge_short
+
+
+# In[548]:
+
+
+# i=0
+# plt.figure(figsize=(20, 30))
+
+# for col in ETFs.columns:
+#     plt.subplot(4, 2,i+1)
+#     i=i+1
+#     plt.plot(ridge_result.index,ridge_result[col],color='r')
+#     plt.plot(ridge_result.index,y_test_ret[col],color='b',alpha=0.5)
+#     plt.xlabel('Date')
+#     plt.ylabel('Return')
+#     plt.title(ret)
+#     plt.legend(['Pred','Real'])
+# plt.show()
+
+
+# In[ ]:
+
+
+
+
+
+# In[549]:
+
+
+# In sample
+for i in ridge:
+    portfolio_ridge_train[i] = ridge_weights*y_train_ret[i]
+portfolio_ridge_train['ridge_portfolio_ret'] = portfolio_ridge_train.iloc[:,0:3].apply(lambda x:x.sum(),axis=1)-portfolio_ridge_train.iloc[:,3:6].apply(lambda x:x.sum(),axis=1)
+display(portfolio_ridge_train)
+
+Ann_ret_ridge_in = (365/len(portfolio_ridge_train)*np.sum(portfolio_ridge_train['ridge_portfolio_ret']))
+print('The annulised return in sample in ridge regression is: ',Ann_ret_ridge_in)
+
+Ann_std_ridge_in=(365**(1/2))*np.std(portfolio_ridge_train['ridge_portfolio_ret'])
+Ann_sharpe_ridge_in = (Ann_ret_ridge_in-Rf)/Ann_std_ridge_in
+print('The annulised sharpe ratio in sample in ridge regression is: ',Ann_sharpe_ridge_in)
+
+
+# In[551]:
+
+
+# Out sample
+for i in ridge:
+    portfolio_ridge_test[i] = ridge_weights*y_test_ret_2[i]
+portfolio_ridge_test['ridge_portfolio_ret'] = portfolio_ridge_test.iloc[:,0:3].apply(lambda x:x.sum(),axis=1)-portfolio_ridge_test.iloc[:,3:6].apply(lambda x:x.sum(),axis=1)
+display(portfolio_ridge_test)
+
+Ann_ret_ridge_out = (365/len(portfolio_ridge_test)*np.sum(portfolio_ridge_test['ridge_portfolio_ret']))
+print('The annulised return out of sample in ridge regression is: ',Ann_ret_ridge_out)
+
+Ann_std_ridge_out=(365**(1/2))*np.std(portfolio_ridge_test['ridge_portfolio_ret'])
+Ann_sharpe_ridge_out = (Ann_ret_ridge_out-Rf)/Ann_std_ridge_out
+print('The annulised sharpe ratio out of sample in ridge regression is: ',Ann_sharpe_ridge_out)
+
+
+# In[ ]:
+
+
+
+
+
+# # Lasso
+
+# In[216]:
+
+
+get_ipython().run_cell_magic('time', '', "# Lasso\nlasso_result_price = pd.DataFrame()\nfor col in ETFs:\n    lasso = Lasso()\n    \n    alphas = np.linspace(0.000001, 0.01, 500)\n    time_cv_lasso = TimeSeriesSplit(n_splits=5).split(x_train)\n    \n    parameters = {'alpha': alphas}\n    gs_lasso = GridSearchCV(lasso, parameters, cv=time_cv_lasso,n_jobs=-1 ,refit=True, \n                            scoring = 'neg_mean_squared_error', verbose=2)\n    gs_lasso.fit(x_train, y_train[col])\n    alpha_lasso = gs_lasso.best_params_\n    print('Best alpha is: ',alpha_lasso)\n    print('Best score is: ',gs_lasso.best_score_)\n    lasso = Lasso(alpha = alpha_lasso['alpha'])\n    lasso.fit(x_train,y_train[col])\n    y_pred_lasso = pd.DataFrame(lasso.predict(x_test_2))\n    lasso_result_price = pd.concat([lasso_result_price,y_pred_lasso],axis=1)\n\n#     lasso_result = pd.DataFrame(y_pred_lasso,columns = y_test.columns)\nlasso_result_price.columns = y_test.columns\ndisplay(lasso_result_price)")
+
+
+# In[217]:
+
+
+lasso_result_price
+
+
+# In[218]:
+
+
+# Lasso: predict price first, then return
+lasso_etf_return = pd.DataFrame()
+
+for i in lasso_result_price[1:]:
+    nlist = list(lasso_result_price[i])
+    ret = [0]*(len(nlist)-1)
+    for j in range(len(ret)):
+        ret[j] = np.log(nlist[j+1]/nlist[j])
+        lasso_etf_return[i] = ret
+lasso_etf_return
+lasso_result = lasso_etf_return
+
+
+# In[219]:
+
+
+lasso_result
+
+
+# In[220]:
+
+
+lasso_ret_mse_out = mean_squared_error(y_test_ret_2,lasso_result)
+print('The MSE of out sample set under the lasso model is:',lasso_ret_mse_out)
+
+
+# In[221]:
+
+
+lasso_result_2 = copy.deepcopy(lasso_result)
+
+
+# In[222]:
+
+
+lasso_result_2['DATE']=y_test_date_ret_2['DATE']
+
+
+# In[223]:
+
+
+lasso_result_2['month'] = pd.to_datetime(lasso_result_2['DATE']).dt.month
+lasso_result_2['year'] = pd.to_datetime(lasso_result_2['DATE']).dt.year
+lasso_result_2 = lasso_result_2.groupby(['year','month'],as_index=False).mean()
+
+
+# In[224]:
+
+
+lasso_result_3 = lasso_result_2[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+lasso_result_3 = lasso_result_3.T
+lasso_result_3
+
+
+# In[225]:
+
+
+index_1_lasso = []
+index_2_lasso = []
+
+for i in range(len(lasso_result_2)):
+    index_1_lasso.append(lasso_result_3.iloc[:,i].nlargest(3).index)
+    index_2_lasso.append(lasso_result_3.iloc[:,i].nsmallest(3).index)
+
+
+# In[226]:
+
+
+lasso_big = np.array(list(index_1_lasso))
+lasso_small = np.array(list(index_2_lasso))
+
+
+# In[227]:
+
+
+y_test_ret_lasso = copy.deepcopy(y_test_ret_2)
+
+
+# In[228]:
+
+
+y_test_ret_lasso['DATE']=y_test_date_ret_2['DATE']
+
+
+# In[229]:
+
+
+y_test_ret_lasso['month'] = pd.to_datetime(y_test_ret_lasso['DATE']).dt.month
+y_test_ret_lasso['year'] = pd.to_datetime(y_test_ret_lasso['DATE']).dt.year
+y_test_ret_lasso = y_test_ret_lasso.groupby(['year','month'],as_index=False).mean()
+
+
+# In[230]:
+
+
+y_test_ret_lasso = y_test_ret_lasso[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+y_test_ret_lasso_2 = y_test_ret_lasso.T
+
+
+# In[231]:
+
+
+y_test_ret_lasso['wret_XLF'] = [0]*len(y_test_ret_lasso)
+y_test_ret_lasso['wret_XLE'] = [0]*len(y_test_ret_lasso)
+y_test_ret_lasso['wret_XLU'] = [0]*len(y_test_ret_lasso)
+y_test_ret_lasso['wret_XLI'] = [0]*len(y_test_ret_lasso)
+y_test_ret_lasso['wret_XLK'] = [0]*len(y_test_ret_lasso)
+y_test_ret_lasso['wret_XLP'] = [0]*len(y_test_ret_lasso)
+y_test_ret_lasso['wret_XLY'] = [0]*len(y_test_ret_lasso)
+y_test_ret_lasso['wret_XLB'] = [0]*len(y_test_ret_lasso)
+
+list_lasso = ['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']
+
+
+# In[232]:
+
+
+for j in range(len(y_test_ret_lasso)):
+    for i in list_lasso:
+        if i in lasso_big[j]:
+            y_test_ret_lasso['wret_'+i].loc[j] = 1
+        elif i in lasso_small[j]:
+            y_test_ret_lasso['wret_'+i].loc[j] = -1
+        else:
+            y_test_ret_lasso['wret_'+i].loc[j] = 0
+
+
+# In[233]:
+
+
+y_test_ret_lasso['lasso_portfolio_ret'] = y_test_ret_lasso['XLF']*y_test_ret_lasso['wret_XLF']+y_test_ret_lasso['XLE']*y_test_ret_lasso['wret_XLE']+y_test_ret_lasso['XLU']*y_test_ret_lasso['wret_XLU']+y_test_ret_lasso['XLI']*y_test_ret_lasso['wret_XLI']+y_test_ret_lasso['XLK']*y_test_ret_lasso['wret_XLK']+y_test_ret_lasso['XLP']*y_test_ret_lasso['wret_XLP']+y_test_ret_lasso['XLY']*y_test_ret_lasso['wret_XLY']+y_test_ret_lasso['XLB']*y_test_ret_lasso['wret_XLB']
+
+
+# In[234]:
+
+
+y_test_ret_lasso
+
+
+# # Lasso train (in sample)
+
+# In[235]:
+
+
+get_ipython().run_cell_magic('time', '', "# Lasso\nlasso_result_price_train = pd.DataFrame()\nfor col in ETFs:\n    lasso = Lasso()\n    \n    alphas = np.linspace(0.000001, 0.01, 500)\n    time_cv_lasso = TimeSeriesSplit(n_splits=5).split(x_train)\n    \n    parameters = {'alpha': alphas}\n    gs_lasso = GridSearchCV(lasso, parameters, cv=time_cv_lasso,n_jobs=-1 ,refit=True, \n                            scoring = 'neg_mean_squared_error', verbose=2)\n    gs_lasso.fit(x_train, y_train[col])\n    alpha_lasso = gs_lasso.best_params_\n    print('Best alpha is: ',alpha_lasso)\n    print('Best score is: ',gs_lasso.best_score_)\n    lasso = Lasso(alpha = alpha_lasso['alpha'])\n    lasso.fit(x_train,y_train[col])\n    y_pred_lasso_train = pd.DataFrame(lasso.predict(x_test_1))\n    lasso_result_price_train = pd.concat([lasso_result_price_train,y_pred_lasso_train],axis=1)\n\n#     lasso_result = pd.DataFrame(y_pred_lasso,columns = y_test.columns)\nlasso_result_price_train.columns = y_test.columns\ndisplay(lasso_result_price_train)")
+
+
+# In[236]:
+
+
+lasso_etf_return_train = pd.DataFrame()
+
+for i in lasso_result_price_train[1:]:
+    nlist = list(lasso_result_price_train[i])
+    ret = [0]*(len(nlist)-1)
+    for j in range(len(ret)):
+        ret[j] = np.log(nlist[j+1]/nlist[j])
+        lasso_etf_return_train[i] = ret
+lasso_etf_return_train
+lasso_result_train = lasso_etf_return_train
+
+
+# In[237]:
+
+
+lasso_ret_mse_in = mean_squared_error(y_test_ret_1,lasso_result_train)
+print('The MSE of in sample set under the lasso model is:',lasso_ret_mse_in)
+
+
+# In[238]:
+
+
+lasso_result_train_2 = copy.deepcopy(lasso_result_train)
+
+
+# In[239]:
+
+
+lasso_result_train_2['DATE']=y_test_date_ret_1['DATE']
+
+
+# In[240]:
+
+
+lasso_result_train_2['month'] = pd.to_datetime(lasso_result_train_2['DATE']).dt.month
+lasso_result_train_2['year'] = pd.to_datetime(lasso_result_train_2['DATE']).dt.year
+lasso_result_train_2 = lasso_result_train_2.groupby(['year','month'],as_index=False).mean()
+
+
+# In[241]:
+
+
+lasso_result_train_3 = lasso_result_train_2[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+lasso_result_train_3 = lasso_result_train_3.T
+lasso_result_train_3
+
+
+# In[242]:
+
+
+index_1_lasso_train = []
+index_2_lasso_train = []
+
+for i in range(len(lasso_result_train_2)):
+    index_1_lasso_train.append(lasso_result_train_3.iloc[:,i].nlargest(3).index)
+    index_2_lasso_train.append(lasso_result_train_3.iloc[:,i].nsmallest(3).index)
+
+
+# In[243]:
+
+
+lasso_big_train = np.array(list(index_1_lasso_train))
+lasso_small_train = np.array(list(index_2_lasso_train))
+
+
+# In[244]:
+
+
+y_train_ret_lasso = copy.deepcopy(y_test_ret_1)
+
+
+# In[245]:
+
+
+y_train_ret_lasso['DATE']=y_test_date_ret_1['DATE']
+
+
+# In[246]:
+
+
+y_train_ret_lasso['month'] = pd.to_datetime(y_train_ret_lasso['DATE']).dt.month
+y_train_ret_lasso['year'] = pd.to_datetime(y_train_ret_lasso['DATE']).dt.year
+y_train_ret_lasso = y_train_ret_lasso.groupby(['year','month'],as_index=False).mean()
+
+
+# In[247]:
+
+
+y_train_ret_lasso = y_train_ret_lasso[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+y_train_ret_lasso_2 = y_train_ret_lasso.T
+
+
+# In[248]:
+
+
+y_train_ret_lasso['wret_XLF'] = [0]*len(y_train_ret_lasso)
+y_train_ret_lasso['wret_XLE'] = [0]*len(y_train_ret_lasso)
+y_train_ret_lasso['wret_XLU'] = [0]*len(y_train_ret_lasso)
+y_train_ret_lasso['wret_XLI'] = [0]*len(y_train_ret_lasso)
+y_train_ret_lasso['wret_XLK'] = [0]*len(y_train_ret_lasso)
+y_train_ret_lasso['wret_XLP'] = [0]*len(y_train_ret_lasso)
+y_train_ret_lasso['wret_XLY'] = [0]*len(y_train_ret_lasso)
+y_train_ret_lasso['wret_XLB'] = [0]*len(y_train_ret_lasso)
+
+list_lasso_train = ['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']
+
+
+# In[249]:
+
+
+for j in range(len(y_train_ret_lasso)):
+    for i in list_lasso_train:
+        if i in lasso_big_train[j]:
+            y_train_ret_lasso['wret_'+i].loc[j] = 1
+        elif i in lasso_small_train[j]:
+            y_train_ret_lasso['wret_'+i].loc[j] = -1
+        else:
+            y_train_ret_lasso['wret_'+i].loc[j] = 0
+
+
+# In[250]:
+
+
+y_train_ret_lasso['lasso_portfolio_ret'] = y_train_ret_lasso['XLF']*y_train_ret_lasso['wret_XLF']+y_train_ret_lasso['XLE']*y_train_ret_lasso['wret_XLE']+y_train_ret_lasso['XLU']*y_train_ret_lasso['wret_XLU']+y_train_ret_lasso['XLI']*y_train_ret_lasso['wret_XLI']+y_train_ret_lasso['XLK']*y_train_ret_lasso['wret_XLK']+y_train_ret_lasso['XLP']*y_train_ret_lasso['wret_XLP']+y_train_ret_lasso['XLY']*y_train_ret_lasso['wret_XLY']+y_train_ret_lasso['XLB']*y_train_ret_lasso['wret_XLB']
+y_train_ret_lasso
+
+
+# In[251]:
+
+
+in_annual_return_1asso = 12/len(y_train_ret_lasso) * y_train_ret_lasso['lasso_portfolio_ret'].sum()
+out_annual_return_1asso = 12/(len(y_test_ret_lasso)) * y_test_ret_lasso['lasso_portfolio_ret'].sum()
+
+print('Annualized return (in sample) in lasso model is: ', in_annual_return_1asso)
+print('Annualized return (out of sample) in lasso model is: ', out_annual_return_1asso)
+
+
+# In[252]:
+
+
+in_annual_risk_lasso = (12**0.5)*np.std(y_train_ret_lasso['lasso_portfolio_ret'])
+out_annual_risk_lasso = (12**0.5)*np.std(y_test_ret_lasso['lasso_portfolio_ret'])
+
+print('Annualized risk (in sample) in lasso model is: ', in_annual_risk_lasso)
+print('Annualized risk (out of sample) in lasso model is: ', out_annual_risk_lasso)
+
+
+# In[253]:
+
+
+
+in_annual_sharpe_lasso = (in_annual_return_1asso-Rf)/in_annual_risk_lasso
+out_annual_sharpe_lasso = (out_annual_return_1asso-Rf)/out_annual_risk_lasso
+
+print('Annualized sharpe ratio (in sample) in lasso model is: ', in_annual_sharpe_lasso)
+print('Annualized sharpe ratio (out of sample) in lasso model is: ', out_annual_sharpe_lasso)
+
+
+# In[ ]:
+
+
+
+
+
+# In[254]:
+
+
+y_train_ret_lasso_month = copy.deepcopy(y_train_ret_lasso)
+y_train_ret_lasso_month = pd.concat([lasso_result_train_2[['year','month']],y_train_ret_lasso_month],axis =1)
+
+y_test_ret_lasso_month = copy.deepcopy(y_test_ret_lasso)
+y_test_ret_lasso_month = pd.concat([lasso_result_2[['year','month']],y_test_ret_lasso_month],axis =1)
+y_test_ret_lasso_month = y_test_ret_lasso_month[1:]
+
+
+# In[255]:
+
+
+df3 = pd.concat([y_train_ret_lasso_month,y_test_ret_lasso_month],axis = 0).reset_index()
+
+
+# In[256]:
+
+
+df3
+
+
+# In[283]:
+
+
+F = 0
+E = 0
+U = 0
+I = 0
+K = 0
+P = 0
+Y = 0
+B = 0
+turn_over_lasso = 0
+
+for i in range(len(df3)-1):
+    F = df3['wret_XLF'][i]*df3['XLF'][i+1] 
+    E = df3['wret_XLE'][i]*df3['XLE'][i+1] 
+    U = df3['wret_XLU'][i]*df3['XLU'][i+1] 
+    I = df3['wret_XLI'][i]*df3['XLI'][i+1]
+    K = df3['wret_XLK'][i]*df3['XLK'][i+1] 
+    P = df3['wret_XLP'][i]*df3['XLP'][i+1] 
+    Y = df3['wret_XLY'][i]*df3['XLY'][i+1] 
+    B = df3['wret_XLB'][i]*df3['XLB'][i+1]
+    J = F+E+U+I+K+P+Y+B
+    
+    turn_over_lasso += (np.abs(df3['wret_XLF'][i+1] - (df3['wret_XLF'][i]*(1+df3['XLF'][i+1]))/(1+J))+np.abs(df3['wret_XLE'][i+1] - (df3['wret_XLE'][i]*(1+df3['XLE'][i+1]))/(1+J))+np.abs(df3['wret_XLU'][i+1] - (df3['wret_XLU'][i]*(1+df3['XLU'][i+1]))/(1+J))+np.abs(df3['wret_XLI'][i+1] - (df3['wret_XLI'][i]*(1+df3['XLI'][i+1]))/(1+J))+np.abs(df3['wret_XLK'][i+1] - (df3['wret_XLK'][i]*(1+df3['XLK'][i+1]))/(1+J))+np.abs(df3['wret_XLP'][i+1] - (df3['wret_XLP'][i]*(1+df3['XLP'][i+1]))/(1+J))+np.abs(df3['wret_XLY'][i+1] - (df3['wret_XLY'][i]*(1+df3['XLY'][i+1]))/(1+J))+np.abs(df3['wret_XLB'][i+1] - (df3['wret_XLB'][i]*(1+df3['XLB'][i+1]))/(1+J)))/12
+  
+print('The average monthly turnover linear in lasso model is: ', (1/len(df3)) * turn_over_lasso)
+
+
+# In[ ]:
+
+
+
+
+
+# # Lasso: portfolio not changed
+
+# In[612]:
+
+
+lasso_mean= pd.DataFrame(lasso_result.mean(axis=0))
+lasso_mean.columns=['lasso_mean_ret']
+
+# Ranking
+lasso_mean = lasso_mean.sort_values(by='lasso_mean_ret', ascending=False)
+
+# Long ETFs in linear model
+lasso_long = list(lasso_mean.head(3).T.columns)
+# Short ETFs in linear model
+lasso_short = list(lasso_mean.tail(3).T.columns)
+
+lasso_weights = 1/6
+portfolio_lasso_test = pd.DataFrame()
+portfolio_lasso_train = pd.DataFrame()
+lasso = lasso_long + lasso_short
+
+
+# In[613]:
+
+
+lasso 
+
+
+# In[614]:
+
+
+# In sample
+for i in lasso:
+    portfolio_lasso_train[i] = lasso_weights*y_train_ret[i]
+portfolio_lasso_train['lasso_portfolio_ret'] = portfolio_lasso_train.iloc[:,0:3].apply(lambda x:x.sum(),axis=1)-portfolio_lasso_train.iloc[:,3:6].apply(lambda x:x.sum(),axis=1)
+display(portfolio_lasso_train)
+
+Ann_ret_lasso_in = (365/len(portfolio_lasso_train)*np.sum(portfolio_lasso_train['lasso_portfolio_ret']))
+print('The annulised return in sample in lasso regression is: ',Ann_ret_lasso_in)
+
+Ann_std_lasso_in=(365**(1/2))*np.std(portfolio_lasso_train['lasso_portfolio_ret'])
+Rf = 0.0162
+Ann_sharpe_lasso_in = (Ann_ret_lasso_in-Rf)/Ann_std_lasso_in
+print('The annulised sharpe ratio in sample in lasso regression is: ',Ann_sharpe_lasso_in)
+
+
+# In[616]:
+
+
+# Out sample
+for i in lasso:
+    portfolio_lasso_test[i] = lasso_weights*y_test_ret_2[i]
+portfolio_lasso_test['lasso_portfolio_ret'] = portfolio_lasso_test.iloc[:,0:3].apply(lambda x:x.sum(),axis=1)-portfolio_lasso_test.iloc[:,3:6].apply(lambda x:x.sum(),axis=1)
+display(portfolio_lasso_test)
+
+Ann_ret_lasso_out = (365/len(portfolio_lasso_test)*np.sum(portfolio_lasso_test['lasso_portfolio_ret']))
+print('The annulised return out of sample in lasso regression is: ',Ann_ret_lasso_out)
+
+Ann_std_lasso_out=(365**(1/2))*np.std(portfolio_lasso_test['lasso_portfolio_ret'])
+Rf = 0.0162
+Ann_sharpe_lasso_out = (Ann_ret_lasso_out-Rf)/Ann_std_lasso_out
+print('The annulised sharpe ratio out of sample in lasso regression is: ',Ann_sharpe_lasso_out)
+
+
+# In[ ]:
+
+
+
+
+
+# In[278]:
+
+
+# #exp_return = pd.DataFrame()
+# def lasso (ridge, x_train, x_test, y_train, y_test):
+#     exp_return = pd.DataFrame()
+#     for i in range(len(y_train.columns)):
+        
+#         param_grid = {'alpha': [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5]}
+#         model = Ridge()
+#         Model = GridSearchCV(model, param_grid, cv = 10).fit(x_train.values, y_train.iloc[:,i].values)
+        
+#         # Best Parameters
+#         print("The best score of the grid search is : ",Model.best_score_)
+#         print("The best params of the grid search is : ",Model.best_params_)
+        
+#         # Expected Return
+#         expected_return = Model.predict(x_test.values)
+#         exp_return.loc[:,i] = expected_return
+# #         R2 = r2_score(y_test.iloc[:,i], expected_return)
+#     return(exp_return)
+
+# lasso(ridge, x_train, x_test, y_train, y_test)
+
+
+# In[ ]:
+
+
+
+
+
+# # XGBRegression
+
+# In[60]:
+
+
+from sklearn.model_selection import RepeatedKFold
+from sklearn.model_selection import cross_val_score
+# define model
+model = XGBRegressor()
+# define model evaluation method
+cv = RepeatedKFold(n_splits=10, n_repeats=3, random_state=1)
+scores = []
+model_list = []
+# evaluate model
+for i in range(8):
+    model_list.append(XGBRegressor())
+    scores.append(cross_val_score(model_list[i], x_train, y_train.iloc[:,i], scoring='neg_mean_absolute_error', cv=cv, n_jobs=-1))
+
+
+# In[61]:
+
+
+# force scores to be positive
+scores = np.abs(scores)
+
+mse = pd.DataFrame()
+for i in range(8): 
+    mse.at[1,i] =scores[i].std()
+    print( y_test.columns[i] +'   MAE: {0}' .format (scores[i].mean())+ '  MSE : {0}'.format(scores[i].std()))
+#calculate mse
+mse.columns = y_test.columns
+mse = mse.sort_values(axis=1,by =1, ascending=True)
+mse
+
+
+# In[ ]:
+
+
+# xgb_lst = sorted(xgb_pred)
+xgb_lst = ['XLP',
+ 'XLU',
+ 'XLF',
+ 'XLK',
+ 'XLB',
+ 'XLI',
+ 'XLY',
+ 'XLE']
+xgb_long = xgb_lst[:3]
+xgb_short = xgb_lst[-3:]
+
+xgb_weights = 1/6
+portfolio_xgb_test = pd.DataFrame()
+portfolio_xgb_train = pd.DataFrame()
+xgb = xgb_long + xgb_short
+ 
+
+
+# # XGB in sample
+
+# In[77]:
+
+
+# def XGBregression(x_train, y_train):
+#     my_cv = TimeSeriesSplit(n_splits=4).split(x_train)
+#     cv_params = {'n_estimators': [6, 7, 8, 10, 20], 'learning_rate': [0.01, 0.1, 0.3, 1], 'max_depth': [4, 5, 6, 7, 8],
+#                  'min_child_weight': [4, 5, 6, 7, 8], 'gamma': [1, 3], 'reg_alpha': [0.1, 0.3]}
+#     other_params = {'learning_rate': 0.1, 'n_estimators': 90, 'max_depth': 7, 'min_child_weight': 4, 'seed': 0,
+#                     'subsample': 1, 'colsample_bytree': 0.9, 'gamma': 1, 'reg_alpha': 0.1, "lambda": 0.9}
+#     model = XGBRegressor(**other_params)
+#     optimized_GBM = GridSearchCV(estimator=model, param_grid=cv_params, scoring='neg_mean_absolute_error', cv=my_cv)
+#     optimized_GBM.fit(x_train, y_train)
+#     model = optimized_GBM.best_estimator_
+    
+#     print("The best score of the grid search is : ", optimized_GBM.best_score_)
+#     print("The best params of the grid search is : ", optimized_GBM.best_params_)
+    
+#     return model
+# XGBregression(x_train, y_train)
+
+
+# 
+
+# In[264]:
+
+
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import r2_score
+xgb_result_price_train = pd.DataFrame()
+
+for col in ETFs:
+    xgb_model = XGBRegressor()
+    xgb_model.fit(x_train, y_train[col])
+    y_pred_xgb_train = pd.DataFrame(xgb_model.predict(x_test_1))
+    xgb_result_price_train = pd.concat([xgb_result_price_train,y_pred_xgb_train],axis=1)
+
+xgb_result_price_train.columns = y_test.columns
+display(xgb_result_price_train)
+# plt.show()
+
+
+# In[265]:
+
+
+xgb_etf_return_train = pd.DataFrame()
+
+for i in xgb_result_price_train[1:]:
+    nlist = list(xgb_result_price_train[i])
+    ret = [0]*(len(nlist)-1)
+    for j in range(len(ret)):
+        ret[j] = np.log(nlist[j+1]/nlist[j])
+        xgb_etf_return_train[i] = ret
+xgb_etf_return_train
+xgb_result_train = xgb_etf_return_train
+
+
+# In[266]:
+
+
+xgb_result_train
+
+
+# In[288]:
+
+
+xgb_ret_mse_in = mean_squared_error(y_test_ret_1,xgb_result_train)
+print('The MSE of in-sample set under the XGBoost model is:',xgb_ret_mse_in)
+
+
+# In[268]:
+
+
+xgb_result_train_2 = copy.deepcopy(xgb_result_train)
+
+
+# In[269]:
+
+
+xgb_result_train_2['DATE']=y_test_date_ret_1['DATE']
+
+
+# In[270]:
+
+
+xgb_result_train_2['month'] = pd.to_datetime(xgb_result_train_2['DATE']).dt.month
+xgb_result_train_2['year'] = pd.to_datetime(xgb_result_train_2['DATE']).dt.year
+xgb_result_train_2 = xgb_result_train_2.groupby(['year','month'],as_index=False).mean()
+
+
+# In[271]:
+
+
+xgb_result_train_3 = xgb_result_train_2[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+xgb_result_train_3 = xgb_result_train_3.T
+xgb_result_train_3
+
+
+# In[272]:
+
+
+index_1_xgb_train = []
+index_2_xgb_train = []
+
+for i in range(len(xgb_result_train_2)):
+    index_1_xgb_train.append(xgb_result_train_3.iloc[:,i].nlargest(3).index)
+    index_2_xgb_train.append(xgb_result_train_3.iloc[:,i].nsmallest(3).index)
+
+
+# In[273]:
+
+
+xgb_big_train = np.array(list(index_1_xgb_train))
+xgb_small_train = np.array(list(index_2_xgb_train))
+
+
+# In[274]:
+
+
+y_train_ret_xgb = copy.deepcopy(y_test_ret_1)
+
+
+# In[275]:
+
+
+y_train_ret_xgb['DATE']=y_test_date_ret_1['DATE']
+
+
+# In[276]:
+
+
+y_train_ret_xgb
+
+
+# In[277]:
+
+
+y_train_ret_xgb['month'] = pd.to_datetime(y_train_ret_xgb['DATE']).dt.month
+y_train_ret_xgb['year'] = pd.to_datetime(y_train_ret_xgb['DATE']).dt.year
+y_train_ret_xgb = y_train_ret_xgb.groupby(['year','month'],as_index=False).mean()
+
+
+# In[278]:
+
+
+y_train_ret_xgb = y_train_ret_xgb[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+y_train_ret_xgb_2 = y_train_ret_xgb.T
+
+
+# In[279]:
+
+
+y_train_ret_xgb['wret_XLF'] = [0]*len(y_train_ret_xgb)
+y_train_ret_xgb['wret_XLE'] = [0]*len(y_train_ret_xgb)
+y_train_ret_xgb['wret_XLU'] = [0]*len(y_train_ret_xgb)
+y_train_ret_xgb['wret_XLI'] = [0]*len(y_train_ret_xgb)
+y_train_ret_xgb['wret_XLK'] = [0]*len(y_train_ret_xgb)
+y_train_ret_xgb['wret_XLP'] = [0]*len(y_train_ret_xgb)
+y_train_ret_xgb['wret_XLY'] = [0]*len(y_train_ret_xgb)
+y_train_ret_xgb['wret_XLB'] = [0]*len(y_train_ret_xgb)
+
+list_xgb_train = ['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']
+
+
+# In[280]:
+
+
+for j in range(len(y_train_ret_xgb)):
+    for i in list_xgb_train:
+        if i in xgb_big_train[j]:
+            y_train_ret_xgb['wret_'+i].loc[j] = 1
+        elif i in xgb_small_train[j]:
+            y_train_ret_xgb['wret_'+i].loc[j] = -1
+        else:
+            y_train_ret_xgb['wret_'+i].loc[j] = 0
+
+
+# In[281]:
+
+
+y_train_ret_xgb['xgb_portfolio_ret'] = y_train_ret_xgb['XLF']*y_train_ret_xgb['wret_XLF']+y_train_ret_xgb['XLE']*y_train_ret_xgb['wret_XLE']+y_train_ret_xgb['XLU']*y_train_ret_xgb['wret_XLU']+y_train_ret_xgb['XLI']*y_train_ret_xgb['wret_XLI']+y_train_ret_xgb['XLK']*y_train_ret_xgb['wret_XLK']+y_train_ret_xgb['XLP']*y_train_ret_xgb['wret_XLP']+y_train_ret_xgb['XLY']*y_train_ret_xgb['wret_XLY']+y_train_ret_xgb['XLB']*y_train_ret_xgb['wret_XLB']
+
+
+# In[282]:
+
+
+y_train_ret_xgb
+
+
+# # XGB out sample
+
+# In[284]:
+
+
+xgb_result_price = pd.DataFrame()
+
+for col in ETFs:
+    xgb_model = XGBRegressor()
+    xgb_model.fit(x_train, y_train[col])
+    y_pred_xgb = pd.DataFrame(xgb_model.predict(x_test_2))
+    xgb_result_price = pd.concat([xgb_result_price,y_pred_xgb],axis=1)
+
+xgb_result_price.columns = y_test.columns
+display(xgb_result_price)
+
+
+# In[285]:
+
+
+# Linear: predict price first, then return
+xgb_etf_return = pd.DataFrame()
+
+for i in xgb_result_price[1:]:
+    nlist = list(xgb_result_price[i])
+    ret = [0]*(len(nlist)-1)
+    for j in range(len(ret)):
+        ret[j] = np.log(nlist[j+1]/nlist[j])
+        xgb_etf_return[i] = ret
+xgb_etf_return
+xgb_result = xgb_etf_return
+
+
+# In[286]:
+
+
+xgb_result
+
+
+# In[287]:
+
+
+xgb_ret_mse_out = mean_squared_error(y_test_ret_2,xgb_result)
+print('The MSE of out sample set under the XGBoost model is:',xgb_ret_mse_out)
+
+
+# In[290]:
+
+
+xgb_result_2 = copy.deepcopy(xgb_result)
+
+
+# In[291]:
+
+
+xgb_result_2['DATE']=y_test_date_ret_2['DATE']
+
+
+# In[292]:
+
+
+xgb_result_2['month'] = pd.to_datetime(xgb_result_2['DATE']).dt.month
+xgb_result_2['year'] = pd.to_datetime(xgb_result_2['DATE']).dt.year
+xgb_result_2 = xgb_result_2.groupby(['year','month'],as_index=False).mean()
+
+
+# In[293]:
+
+
+xgb_result_3 = xgb_result_2[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+xgb_result_3 = xgb_result_3.T
+xgb_result_3
+
+
+# In[294]:
+
+
+index_1_xgb = []
+index_2_xgb = []
+
+for i in range(len(xgb_result_2)):
+    index_1_xgb.append(xgb_result_3.iloc[:,i].nlargest(3).index)
+    index_2_xgb.append(xgb_result_3.iloc[:,i].nsmallest(3).index)
+
+
+# In[295]:
+
+
+xgb_big = np.array(list(index_1_xgb))
+xgb_small = np.array(list(index_2_xgb))
+
+
+# In[299]:
+
+
+xgb_big
+
+
+# In[302]:
+
+
+y_test_ret_xgb = copy.deepcopy(y_test_ret_2)
+
+
+# In[306]:
+
+
+y_test_ret_xgb['DATE']=y_test_date_ret_2['DATE']
+
+
+# In[307]:
+
+
+y_test_ret_xgb
+
+
+# In[308]:
+
+
+y_test_ret_xgb['month'] = pd.to_datetime(y_test_ret_xgb['DATE']).dt.month
+y_test_ret_xgb['year'] = pd.to_datetime(y_test_ret_xgb['DATE']).dt.year
+y_test_ret_xgb = y_test_ret_xgb.groupby(['year','month'],as_index=False).mean()
+
+
+# In[309]:
+
+
+y_test_ret_xgb = y_test_ret_xgb[['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']]
+y_test_ret_xgb_2 = y_test_ret_xgb.T
+
+
+# In[310]:
+
+
+y_test_ret_xgb['wret_XLF'] = [0]*len(y_test_ret_xgb)
+y_test_ret_xgb['wret_XLE'] = [0]*len(y_test_ret_xgb)
+y_test_ret_xgb['wret_XLU'] = [0]*len(y_test_ret_xgb)
+y_test_ret_xgb['wret_XLI'] = [0]*len(y_test_ret_xgb)
+y_test_ret_xgb['wret_XLK'] = [0]*len(y_test_ret_xgb)
+y_test_ret_xgb['wret_XLP'] = [0]*len(y_test_ret_xgb)
+y_test_ret_xgb['wret_XLY'] = [0]*len(y_test_ret_xgb)
+y_test_ret_xgb['wret_XLB'] = [0]*len(y_test_ret_xgb)
+
+list_xgb = ['XLF','XLE','XLU','XLI','XLK','XLP','XLY','XLB']
+
+
+# In[311]:
+
+
+y_test_ret_xgb
+
+
+# In[312]:
+
+
+for j in range(len(y_test_ret_xgb)):
+    for i in list_xgb:
+        if i in xgb_big[j]:
+            y_test_ret_xgb['wret_'+i].loc[j] = 1
+        elif i in xgb_small[j]:
+            y_test_ret_xgb['wret_'+i].loc[j] = -1
+        else:
+            y_test_ret_xgb['wret_'+i].loc[j] = 0
+
+
+# In[313]:
+
+
+y_test_ret_xgb['xgb_portfolio_ret'] = y_test_ret_xgb['XLF']*y_test_ret_xgb['wret_XLF']+y_test_ret_xgb['XLE']*y_test_ret_xgb['wret_XLE']+y_test_ret_xgb['XLU']*y_test_ret_xgb['wret_XLU']+y_test_ret_xgb['XLI']*y_test_ret_xgb['wret_XLI']+y_test_ret_xgb['XLK']*y_test_ret_xgb['wret_XLK']+y_test_ret_xgb['XLP']*y_test_ret_xgb['wret_XLP']+y_test_ret_xgb['XLY']*y_test_ret_xgb['wret_XLY']+y_test_ret_xgb['XLB']*y_test_ret_xgb['wret_XLB']
+
+
+# In[314]:
+
+
+y_test_ret_xgb
+
+
+# # XGB Result
+# 
+
+# In[316]:
+
+
+in_annual_return_xgb = 12/len(y_train_ret_xgb) * np.sum(y_train_ret_xgb['xgb_portfolio_ret'])
+out_annual_return_xgb = 12/(len(y_test_ret_xgb)) * np.sum(y_test_ret_xgb['xgb_portfolio_ret'])
+
+print('Annualized return (in sample) in linear model is :', in_annual_return_xgb)
+print('Annualized return (out of sample) in linear model is :', out_annual_return_xgb)
+
+
+# In[317]:
+
+
+in_annual_risk_xgb = (12**0.5)*np.std(y_train_ret_xgb['xgb_portfolio_ret'])
+out_annual_risk_xgb = (12**0.5)*np.std(y_test_ret_xgb['xgb_portfolio_ret'])
+
+print('Annualized risk (in sample) in XGBoost model is: ', in_annual_risk_xgb)
+print('Annualized risk (out of sample) in XGBoost model is: ', out_annual_risk_xgb)
+
+
+# In[318]:
+
+
+in_annual_sharpe_xgb = (in_annual_return_xgb-Rf)/in_annual_risk_xgb
+out_annual_sharpe_xgb = (out_annual_return_xgb-Rf)/out_annual_risk_xgb
+
+print('Annualized sharpe ratio (in sample) in XGBoost model is: ', in_annual_sharpe_xgb)
+print('Annualized sharpe ratio (out of sample) in XGBoost model is: ', out_annual_sharpe_xgb)
+
+
+# In[319]:
+
+
+y_train_ret_xgb_month = copy.deepcopy(y_train_ret_xgb)
+
+
+# In[320]:
+
+
+y_train_ret_xgb_month = pd.concat([xgb_result_train_2[['year','month']],y_train_ret_xgb_month],axis =1)
+
+
+
+# In[322]:
+
+
+y_train_ret_xgb_month
+
+
+# In[323]:
+
+
+y_test_ret_xgb_month = copy.deepcopy(y_test_ret_xgb)
+
+
+# In[324]:
+
+
+y_test_ret_xbg_month = pd.concat([xgb_result_2[['year','month']],y_test_ret_xgb_month],axis =1)
+y_test_ret_xgb_month = y_test_ret_xgb_month[1:]
+
+
+# In[325]:
+
+
+df4 = pd.concat([y_train_ret_xgb_month,y_test_ret_xgb_month],axis = 0).reset_index(inplace=False)
+
+
+# In[326]:
+
+
+df4
+
+
+# In[327]:
+
+
+F = 0
+E = 0
+U = 0
+I = 0
+K = 0
+P = 0
+Y = 0
+B = 0
+turn_over_xgb = 0
+
+for i in range(len(df4)-1):
+    F = df4['wret_XLF'][i]*df4['XLF'][i+1] 
+    E = df4['wret_XLE'][i]*df4['XLE'][i+1] 
+    U = df4['wret_XLU'][i]*df4['XLU'][i+1] 
+    I = df4['wret_XLI'][i]*df4['XLI'][i+1]
+    K = df4['wret_XLK'][i]*df4['XLK'][i+1] 
+    P = df4['wret_XLP'][i]*df4['XLP'][i+1] 
+    Y = df4['wret_XLY'][i]*df4['XLY'][i+1] 
+    B = df4['wret_XLB'][i]*df4['XLB'][i+1]
+    J = F+E+U+I+K+P+Y+B
+    
+    turn_over_xgb += (np.abs(df4['wret_XLF'][i+1] - (df4['wret_XLF'][i]*(1+df4['XLF'][i+1]))/(1+J))+np.abs(df4['wret_XLE'][i+1] - (df4['wret_XLE'][i]*(1+df4['XLE'][i+1]))/(1+J))+np.abs(df4['wret_XLU'][i+1] - (df4['wret_XLU'][i]*(1+df4['XLU'][i+1]))/(1+J))+np.abs(df4['wret_XLI'][i+1] - (df4['wret_XLI'][i]*(1+df4['XLI'][i+1]))/(1+J))+np.abs(df4['wret_XLK'][i+1] - (df4['wret_XLK'][i]*(1+df4['XLK'][i+1]))/(1+J))+np.abs(df4['wret_XLP'][i+1] - (df4['wret_XLP'][i]*(1+df4['XLP'][i+1]))/(1+J))+np.abs(df4['wret_XLY'][i+1] - (df4['wret_XLY'][i]*(1+df4['XLY'][i+1]))/(1+J))+np.abs(df4['wret_XLB'][i+1] - (df4['wret_XLB'][i]*(1+df4['XLB'][i+1]))/(1+J)))/12
+  
+print('The average monthly turnover in XGBoost model is: ', (1/len(df4)) * turn_over_xgb)
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# # LIN ZHI
+
+# In[63]:
+
+
+
+# %%time
+# xgb_pred = dict()
+
+# for return_col in return_cols:
+#     xgb_model = xgb.XGBRegressor(objective ='reg:squarederror', random_state = 0)
+#     parameters_xgb = {
+#         "colsample_bytree": np.linspace(0.2, 0.4, num=3), # Subsample ratio of columns when constructing each tree.
+#         #"gamma": np.linspace(0, 0.05, num=3), # Minimum loss reduction required to make a further partition on a leaf node of the tree.
+#         "learning_rate": np.linspace(0.07, 0.25, num=3), # Boosting learning rate (xgb’s “eta”).
+#         "max_depth": np.linspace(2, 5, num=4).astype(int), # Maximum tree depth for base learners.
+#         "n_estimators": np.linspace(100, 1000, num=4).astype(int), # Number of gradient boosted trees. Equivalent to number of boosting rounds.
+#         #"subsample": np.linspace(0.4, 0.6, num=2), # Subsample ratio of the training instance.
+#         "lambda": np.linspace(0, 4, 5) # L2 regularization term on weights. Increasing this value will make model more conservative
+#     }
+#     gs_xgb_model = GridSearchCV(xgb_model, parameters_xgb, cv=n_fold, refit=True, n_jobs=n_jobs, scoring = 'neg_mean_squared_error', verbose=2)
+#     gs_xgb_model.fit(x_train, y_train[return_col])
+#     #     print("bestParams: " ,gs_xgb_model.best_params_)
+    
+#     xgb_optimal = gs_xgb_model.best_estimator_
+#     y_pred = xgb_optimal.predict(x_test)
+#     xgb_pred[return_col] = y_pred
+
+# sorted(xgb_pred)   
+
+
+# In[658]:
+
+
+# # xgb_lst = sorted(xgb_pred)
+# xgb_lst = ['XLB',
+#  'XLE',
+#  'XLF',
+#  'XLI',
+#  'XLK',
+#  'XLP',
+#  'XLU',
+#  'XLY']
+
+
+# In[659]:
+
+
+# xgb_long = xgb_lst[:3]
+# xgb_short = xgb_lst[-3:]
+
+# xgb_weights = 1/6
+# portfolio_xgb_test = pd.DataFrame()
+# portfolio_xgb_train = pd.DataFrame()
+# xgb = xgb_long + xgb_short
+
+
+# ###### 
+
+# In[64]:
+
+
+# In sample
+for i in xgb:
+    portfolio_xgb_train[i] = xgb_weights*y_train_ret[i]
+portfolio_xgb_train['xgb_portfolio_ret'] = portfolio_xgb_train.iloc[:,0:3].apply(lambda x:x.sum(),axis=1)-portfolio_xgb_train.iloc[:,3:6].apply(lambda x:x.sum(),axis=1)
+display(portfolio_xgb_train)
+
+Ann_ret_xgb_in = (365/len(portfolio_xgb_train)*np.sum(portfolio_xgb_train['xgb_portfolio_ret']))
+print('The annulised return in sample in xgb regression is: ',Ann_ret_xgb_in)
+
+Ann_std_xgb_in=(365**(1/2))*np.std(portfolio_xgb_train['xgb_portfolio_ret'])
+Rf = 0.0162
+Ann_sharpe_xgb_in = (Ann_ret_xgb_in-Rf)/Ann_std_xgb_in
+print('The annulised sharpe ratio in sample in xgb regression is: ',Ann_sharpe_xgb_in)
+
+
+# In[65]:
+
+
+# Out sample
+for i in xgb:
+    portfolio_xgb_test[i] = xgb_weights*y_test_ret[i]
+portfolio_xgb_test['xgb_portfolio_ret'] = portfolio_xgb_test.iloc[:,0:3].apply(lambda x:x.sum(),axis=1)-portfolio_xgb_test.iloc[:,3:6].apply(lambda x:x.sum(),axis=1)
+display(portfolio_xgb_test)
+
+Ann_ret_xgb_out = (365/len(portfolio_xgb_test)*np.sum(portfolio_xgb_test['xgb_portfolio_ret']))
+print('The annulised return out of sample in xgb regression is: ',Ann_ret_xgb_out)
+
+Ann_std_xgb_out=(365**(1/2))*np.std(portfolio_xgb_test['xgb_portfolio_ret'])
+Rf = 0.0162
+Ann_sharpe_xgb_out = (Ann_ret_xgb_out-Rf)/Ann_std_xgb_out
+print('The annulised sharpe ratio out of sample in xgb regression is: ',Ann_sharpe_xgb_out)
+
+
+# # Pictures
+
+# In[258]:
+
+
+# To plot, we remain the date
+x_train_date = x_norm[:split_index]
+# x_train_date.set_index(['DATE'],inplace=True)
+
+x_test_date= x_norm[split_index:]
+# x_test_date.set_index(['DATE'],inplace=True)
+
+y_train_date = y[:split_index]
+# y_train_date.set_index(['DATE'],inplace=True)
+
+y_test_date = y[split_index:]
+# y_test_date.set_index(['DATE'],inplace=True)
+
+
+# In[259]:
+
+
+x_train_date_ret = pd.DataFrame(x_train_date['DATE'])[1:].reset_index().drop(['index'],axis=1)
+x_test_date_ret = pd.DataFrame(x_test_date['DATE'])[1:].reset_index().drop(['index'],axis=1)
+y_train_date_ret = pd.DataFrame(y_train_date['DATE'])[1:].reset_index().drop(['index'],axis=1)
+y_test_date_ret = pd.DataFrame(y_test_date['DATE'])[1:].reset_index().drop(['index'],axis=1)
+
+
+# In[260]:
+
+
+lin_pic_train = pd.DataFrame(portfolio_lin_train['lin_portfolio_ret'])
+ridge_pic_train = pd.DataFrame(portfolio_lasso_train['lasso_portfolio_ret'])
+lasso_pic_train = pd.DataFrame(portfolio_lasso_train['lasso_portfolio_ret'])
+# xgb_pic_train = pd.DataFrame(portfolio_xgb_train['xgb_portfolio_ret'])
+
+
+# In[261]:
+
+
+portfolios_pic_train = pd.concat([x_train_date_ret,lin_pic_train,ridge_pic_train ,lasso_pic_train],axis=1)
+
+
+# In[305]:
+
+
+portfolios_pic_train.set_index(['DATE'],inplace=True)
+
+
+# In[306]:
+
+
+portfolios_pic_train
+
+
+# # Linear Plot
+
+# In[307]:
+
+
+lin_result_price.set_index(y_test_date['DATE'],inplace=True)
+lin_result.set_index(y_test_date['DATE'][1:],inplace=True)
+
+
+# In[308]:
+
+
+# i=0
+# plt.figure(figsize=(2, 5))
+
+# for col in ETFs.columns:
+#     plt.subplot(4, 2,i+1)
+#     i=i+1
+#     plt.plot(lin_result_price.index,lin_result_price[col],color='r')
+#     plt.plot(lin_result_price.index,y_test[col],color='b',alpha=0.5)
+#     plt.xlabel('Date')
+#     plt.ylabel('Return')
+#     plt.title(ret)
+#     plt.legend(['Pred','Real'])
+# plt.show()
+
+
+# In[309]:
+
+
+def lin_price_pic ():
+    for i in ETFs:
+        plt.figure(figsize=(10, 5))
+    # plt.subplot(2,1,1) 
+        plt.plot(lin_result_price.index,lin_result_price[i],color='r')
+        plt.plot(lin_result_price.index,y_test[i],color='b',alpha=0.5)
+        plt.xlabel('Date')
+        plt.ylabel('Price')
+        plt.legend(['Pred','Real'])
+        plt.title(i)
+    
+lin_price_pic()
+
+
+# In[310]:
+
+
+def lin_ret_pic ():
+    for i in ETFs:
+        plt.figure(figsize=(10, 5))
+    # plt.subplot(2,1,1) 
+        plt.plot(lin_result.index,lin_result[i],color='r')
+        plt.plot(lin_result.index,y_test_ret[i],color='b',alpha=0.5)
+        plt.xlabel('Date')
+        plt.ylabel('Return')
+        plt.legend(['Pred','Real'])
+        plt.title(i)
+    
+lin_ret_pic()
+
+
+# # Ridge Plot
+
+# In[92]:
+
+
+ridge_result_price.set_index(y_test_date['DATE'],inplace=True)
+ridge_result.set_index(y_test_date['DATE'][1:],inplace=True)
+
+
+# In[93]:
+
+
+def ridge_price_pic ():
+    for i in ETFs:
+        plt.figure(figsize=(10, 5))
+    # plt.subplot(2,1,1) 
+        plt.plot(ridge_result_price.index,ridge_result_price[i],color='r')
+        plt.plot(ridge_result_price.index,y_test[i],color='b',alpha=0.5)
+        plt.xlabel('Date')
+        plt.ylabel('Price')
+        plt.legend(['Pred','Real'])
+        plt.title(i)
+    
+ridge_price_pic()
+
+
+# In[94]:
+
+
+def ridge_ret_pic ():
+    for i in ETFs:
+        plt.figure(figsize=(10, 5))
+    # plt.subplot(2,1,1) 
+        plt.plot(ridge_result.index,ridge_result[i],color='r')
+        plt.plot(ridge_result.index,y_test_ret[i],color='b',alpha=0.5)
+        plt.xlabel('Date')
+        plt.ylabel('Return')
+        plt.legend(['Pred','Real'])
+        plt.title(i)
+    
+ridge_ret_pic()
+
+
+# # Lasso Plot
+
+# In[95]:
+
+
+lasso_result_price.set_index(y_test_date['DATE'],inplace=True)
+lasso_result.set_index(y_test_date['DATE'][1:],inplace=True)
+
+
+# In[96]:
+
+
+def lasso_price_pic ():
+    for i in ETFs:
+        plt.figure(figsize=(10, 5))
+    # plt.subplot(2,1,1) 
+        plt.plot(lasso_result_price.index,lasso_result_price[i],color='r')
+        plt.plot(lasso_result_price.index,y_test[i],color='b',alpha=0.5)
+        plt.xlabel('Date')
+        plt.ylabel('Price')
+        plt.legend(['Pred','Real'])
+        plt.title(i)
+    
+lasso_price_pic()
+
+
+# In[97]:
+
+
+def lasso_ret_pic ():
+    for i in ETFs:
+        plt.figure(figsize=(10, 5))
+    # plt.subplot(2,1,1) 
+        plt.plot(lasso_result.index,lasso_result[i],color='r')
+        plt.plot(lasso_result.index,y_test_ret[i],color='b',alpha=0.5)
+        plt.xlabel('Date')
+        plt.ylabel('Return')
+        plt.legend(['Pred','Real'])
+        plt.title(i)
+    
+lasso_ret_pic()
+
+
+# In[ ]:
+
+
+
+
